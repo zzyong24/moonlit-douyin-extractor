@@ -1,0 +1,20 @@
+{
+  "name": "moonlit-douyin-extractor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "月明·抖音萃取 - 抓取自己抖音账号的作品指标和评论，按作品切分落盘到 works/douyin/",
+  "bin": {
+    "moonlit-douyin-extract": "./src/extract.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/extract.mjs",
+    "test": "node --test src/*.test.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

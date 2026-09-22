@@ -1,0 +1,5 @@
+interface:
+  display_name: "月明·抖音萃取"
+  short_description: "把月明自己抖音账号的作品指标和评论按作品切分落盘到 works/douyin/"
+  brand_color: "#39EC88"
+  default_prompt: "使用 $moonlit-douyin-extractor 把月明自己的抖音账号作品数据和评论按作品切分存到 ~/moonlit-creator/works/douyin/<awemeId>/。由 Agent 自动检查登录态；未登录或会话过期时自动调用 ego-browser 打开可见扫码页面，用户只需扫码，不要让用户手动运行终端命令；登录成功后自动继续采集。"
