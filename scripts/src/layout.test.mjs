@@ -17,8 +17,8 @@ test('account datasets, per-account indexes, and mapped work directories stay se
   const accountB = join(worksRoot, 'douyin', 'account-b');
   const pathA = await resolveWorkDir(accountA, 'aweme-1', '同名作品', 'account-a');
   const pathB = await resolveWorkDir(accountB, 'aweme-1', '同名作品', 'account-b');
-  assert.equal(pathA, join(workPath, 'distribution', 'douyin', 'account-a'));
-  assert.equal(pathB, join(workPath, 'distribution', 'douyin', 'account-b'));
+  assert.equal(pathA, join(workPath, 'distribution', 'douyin', 'account-a', 'aweme-1'));
+  assert.equal(pathB, join(workPath, 'distribution', 'douyin', 'account-b', 'aweme-1'));
   assert.notEqual(pathA, pathB);
 
   await writeIndex(accountA, { accountId: 'account-a', totals: { works: 1, comments: 0 }, works: [{ awemeId: 'aweme-1', title: '同名作品' }] });
@@ -29,6 +29,8 @@ test('account datasets, per-account indexes, and mapped work directories stay se
   assert.equal(indexB.accountId, 'account-b');
   assert.match(indexA.works[0].path, /account-a/);
   assert.match(indexB.works[0].path, /account-b/);
+  assert.equal(indexA.works[0].path, '../../2026/W-20260923-001-example/distribution/douyin/account-a/aweme-1/');
+  assert.equal(indexB.works[0].path, '../../2026/W-20260923-001-example/distribution/douyin/account-b/aweme-1/');
 });
 
 test('同标题不能把作品归给别的条目；没有 awemeId 映射时进入当前账号目录', async (t) => {

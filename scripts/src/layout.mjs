@@ -54,7 +54,7 @@ export async function resolveWorkDir(root, awemeId, _title = '', accountId = '_d
       const workPath = join(worksRoot, year.name, entry.name);
       const work = await readJsonSafe(join(workPath, 'work.json'), null);
       const ids = work?.platformIds?.douyin ?? work?.distributionIds?.douyin ?? [];
-      if (ids.includes(awemeId)) return join(workPath, 'distribution', 'douyin', accountId);
+      if (ids.includes(awemeId)) return join(workPath, 'distribution', 'douyin', accountId, awemeId);
     }
   }
   // 未建立作品映射的历史视频也不再散落成数字目录，集中等待人工归档。
@@ -243,7 +243,7 @@ export async function writeIndex(root, payload) {
   const works = [];
   for (const work of payload.works ?? []) {
     const dir = await resolveWorkDir(root, work.awemeId, work.title ?? '', payload.accountId);
-    works.push({ ...work, path: relative(root, join(dir, work.awemeId)) + '/' });
+    works.push({ ...work, path: relative(root, dir) + '/' });
   }
   await writeJson(join(root, '_index.json'), {
     updatedAt: new Date().toISOString(),
