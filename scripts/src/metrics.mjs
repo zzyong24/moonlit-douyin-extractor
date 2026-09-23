@@ -73,6 +73,7 @@ async function gotoWithRetry(page, url, signal) {
  *   signal?: AbortSignal,
  *   capturedAt: string,
  *   root: string,
+ *   accountId: string,
  *   force?: boolean,
  *   maxPages?: number
  * }} args
@@ -87,6 +88,7 @@ export async function fetchAllWorksMetrics({
   signal,
   capturedAt,
   root,
+  accountId,
   force = false,
   maxPages = DEFAULT_MAX_PAGES,
 }) {
@@ -152,10 +154,11 @@ export async function fetchAllWorksMetrics({
     const publishedAt = toIsoFromUnixSeconds(w.createTime);
     const title = deriveTitle(w.title, w.desc);
     const shareUrl = `https://www.douyin.com/video/${w.awemeId}`;
-    const workDir = await resolveWorkDir(root, w.awemeId, title);
+    const workDir = await resolveWorkDir(root, w.awemeId, title, accountId);
 
     try {
       await writeMeta(workDir, {
+        accountId,
         awemeId: w.awemeId,
         title,
         desc: w.desc ?? '',

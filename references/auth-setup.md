@@ -1,131 +1,66 @@
-# 登录态：Skill 自管理 + 引导扫码
+# 认证与账号别名
 
-本 Skill 的扫码登录阶段调用 **ego-browser** 的可见持久页面，不依赖 CreatorOS。登录成功后，Cookie 会被注入 Skill 自己管理的目录（默认 `~/.moonlit-creator/.auth/douyin/<accountId>/`）。
+本 Skill 直接用 Playwright 打开**空白临时 profile**做可见扫码登录。它不依赖 CreatorOS 或 ego-browser，不拷贝 Cookie，也不从别的软件复用浏览器目录。
 
-## 设计目标
-
-| 原则 | 落实 |
-|---|---|
-| ego 可见登录 | 扫码页面由 ego-browser 管理，避免后台 Playwright 窗口不可见 |
-| 用户零成本启动 | 检测不到 cookie 时给清晰报错，提示先跑 `--login-only` |
-| 一次扫码长期复用 | cookie + profile 永久落在磁盘 |
-| 不主动读 CreatorOS 路径 | 默认永远不读；只有用户显式 `--auth-dir` 才读 |
-| SingletonLock 安全 | 检测到锁且进程存活 → 拒绝启动，不强行清理 |
-
-## 默认路径
-
-```
-~/.moonlit-creator/.auth/douyin/<accountId>/
-```
-
-`<accountId>` 是月明在抖音的多账号标识（默认 `_default`）。脚本默认读 `~/.moonlit-creator/.auth/douyin/_default/`，可用 `--account ID` 切换账号。
-
-为什么放在 `~/.moonlit-creator/` 下：
-
-- 它是 moonlit-creator workspace 的私有数据目录，与 `works/` 同级
-- 自然符合"moonlit 体系一切私有数据都在 `~/.moonlit-creator/` 下"的约定
-- 升级 / 备份 / 迁移 moonlit-creator workspace 时一并带走
-
-## 首次使用：扫码流程
+## 环境准备
 
 ```bash
-node scripts/src/extract.mjs --account _default --login-only
+node --version                 # 需要 Node.js 22+
+cd scripts
+npm install
+npx playwright install chromium
 ```
 
-执行后脚本会：
+Playwright 会启动本机可见 Chromium；扫码由用户本人在创作者中心页面完成。扫码窗口超时或用户关闭窗口时，临时 profile 会被清理，不改变已有绑定。
 
-1. 调用 ego-browser 的可见持久页面
-2. 导航到 `https://creator.douyin.com/creator-micro/home`（创作者中心登录页）
-3. 在窗口里显示二维码 + 等待用户扫码
-4. 每秒轮询 cookie，出现 `sessionid` 后用 `/aweme/v1/creator/user/info/` 探一次，status_code=0 → 登录成功
-5. 通过 CDP 读取 Cookie，注入到 `~/.moonlit-creator/.auth/douyin/_default/`
-6. 退出码 0，stdout 输出 `[login] 登录成功 → ~/.moonlit-creator/.auth/douyin/_default/`
-
-扫码超时默认 240 秒；用户随时关窗 = 取消登录（不会报错）。
-
-## 后续采集：自动检测登录态
+## 列出账号
 
 ```bash
-node scripts/src/extract.mjs --account _default
+node scripts/src/extract.mjs --accounts
 ```
 
-执行后脚本会：
+输出仅包含本机别名和绑定时间，不返回 Cookie、原始 `sec_uid` 或会话内容。账号注册表位于 `~/.moonlit-creator/.auth/douyin/accounts.json`。
 
-1. 打开 profile 目录（如果不存在 → 报错"未扫码"，引导用户先跑 `--login-only`）
-2. 检测 SingletonLock（如果存在且进程存活 → 报错"另一个进程正在使用此 profile"）
-3. 起 headless Chromium，复用磁盘 cookie
-4. 探 `/aweme/v1/creator/user/info/`：
-   - status_code=0 → 已登录，继续采集
-   - status_code=8 → 会话过期，提示用户重跑 `--login-only` 重扫
-   - 其他 → 未登录/异常，提示用户重跑 `--login-only`
+## 绑定新账号
 
-首次扫码或重扫需要 ego-browser 的可见页面；后续探针和采集不需要 GUI 介入。
-
-## 命令一览
+用户先选择一个未使用的本机别名，例如 `studio-b`：
 
 ```bash
-# 首次扫码登录（一次性）
-node scripts/src/extract.mjs --account ID --login-only
-
-# 健康检查（探针登录态，cron 可用）
-node scripts/src/extract.mjs --account ID --auth-probe
-
-# 全量采集（指标 + 评论）
-node scripts/src/extract.mjs --account ID
-
-# 切换账号 / 自定义路径
-node scripts/src/extract.mjs --account creator-account-2
-node scripts/src/extract.mjs --account ID --auth-dir /custom/path
-
-# 复用 CreatorOS 已扫码的 cookie（不推荐除非你确定 CreatorOS 不在跑）
-node scripts/src/extract.mjs --account ID --auth-dir ~/CreatorOS/.auth/douyin/ID
+node scripts/src/extract.mjs --account studio-b --login-only
 ```
 
-## SingletonLock 冲突规避
+流程：
 
-**Playwright 的 Chromium 用 SingletonLock 防止两个进程同时打开同一 profile**。如果另一个 Chromium 实例正在用，本 Skill 启动时 `launchPersistentContext` 会直接报错。规避策略：
+1. 创建独立临时 profile 并打开创作者中心二维码。
+2. 等待抖音服务端确认登录，再读取创作者账号资料。
+3. 必须读取到昵称和稳定 `sec_uid`，否则不创建绑定。
+4. 对 `sec_uid` 计算 SHA-256 指纹，拒绝同一身份绑定到多个别名。
+5. 只有身份检查通过后，才将 profile 原子归入 `~/.moonlit-creator/.auth/douyin/studio-b/` 并写入注册表。
 
-| 状态 | 处理 |
-|---|---|
-| `.auth/.../SingletonLock` **不存在** | 安全启动 |
-| `.auth/.../SingletonLock` **存在但进程已死** | 自动清锁后启动（异常退出遗留） |
-| `.auth/.../SingletonLock` **存在且进程存活** | 拒绝启动，提示"另一个进程正在使用此 profile" |
+原始 `sec_uid` 不写入注册表、指标文件或日志。成功提示只显示用户选定别名和昵称。
 
-绝对不强行覆盖 SingletonLock —— 这会丢数据。
+## 重连已绑定账号
 
-## 与 CreatorOS 共享 cookie（可选，不推荐）
+对当前别名重新扫码仍使用同一命令。扫码结果必须与已登记的身份指纹相同；如果扫成了另一个账号，临时 profile 会丢弃，旧 profile 和旧映射保持原样。要新绑定另一个账号，应使用新别名。
 
-如果用户**已经用 CreatorOS 扫过码**，不想再扫一次，可以显式指向 CreatorOS 的 profile：
+旧版本 profile 若没有注册表记录，会保留为 `.legacy-*` 备份；新会话通过独立扫码和身份核验后才接管别名。脚本不会把未核验的 Cookie 直接认作目标账号。
+
+## 登录探针与采集
 
 ```bash
-node scripts/src/extract.mjs --account ID --auth-dir ~/CreatorOS/.auth/douyin/ID
+node scripts/src/extract.mjs --account studio-b --auth-probe
+node scripts/src/extract.mjs --account studio-b
 ```
 
-**注意**：
+每次采集都会核对 profile 中当前账号的稳定身份指纹。失效会话需要重新扫码；身份不符时不采集、不写数据。活跃的 `SingletonLock` 表示 profile 正被占用，脚本会拒绝并发启动，不强制删除。
 
-- 这是 Skill 的"逃生口"而非默认行为。**默认绝不读 CreatorOS 路径**。
-- CreatorOS 正在运行时同时启动本 Skill → SingletonLock 冲突，本 Skill 拒绝启动
-- CreatorOS profile 内部文件结构与 Skill 完全兼容（都是 Playwright `launchPersistentContext` 的标准布局）
-- 如果用户希望两者彻底独立 → 不要用这个选项，分别扫码即可
+## 私有数据
 
-## sessionid 过期怎么办
+默认目录为：
 
-不要试图在本 Skill 里换 cookie 或重新生成二维码。直接报错回退给用户：
-
-```
-✗ 会话已过期（status_code=8）
-  已成功写入 18/23 作品；剩余 5 个作品标记 _FAILED.json。
-  请重跑以下命令重新扫码：
-    node scripts/src/extract.mjs --account ID --login-only
-  扫码完成后用 --resume 重试失败的：
-    node scripts/src/extract.mjs --account ID --resume
+```text
+~/.moonlit-creator/.auth/douyin/accounts.json
+~/.moonlit-creator/.auth/douyin/<别名>/
 ```
 
-`--resume` 标志：仅处理 `_FAILED.json` 的作品，未失败的作品不动。
-
-## 隐私边界
-
-- Cookie 文件本身**不进 git**（用户应在 `~/.moonlit-creator/.gitignore` 忽略 `.auth/`）
-- 本 Skill 不读 cookie 内容，不打印 cookie
-- 日志最多输出"已登录" / "未登录" / "会话过期" 三态
-- meta.json 不写 `nickname` / `sec_uid` / `unique_id`（见 output-layout.md 的"硬规则"）
+这些目录保存本机账号绑定和登录会话，不要放入仓库、同步盘或工单，不要把 Cookie 内容贴到聊天里。`--auth-dir` 只用于显式指定某个别名的独立 profile，不能指向 CreatorOS 或另一个别名的 profile。

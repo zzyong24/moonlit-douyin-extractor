@@ -2,8 +2,9 @@
   "name": "moonlit-douyin-extractor",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
-  "description": "月明·抖音萃取 - 抓取自己抖音账号的作品指标和评论，按作品切分落盘到 works/douyin/",
+  "description": "Standalone multi-account Douyin creator data extractor with isolated local login profiles and outputs",
   "bin": {
     "moonlit-douyin-extract": "./src/extract.mjs"
   },

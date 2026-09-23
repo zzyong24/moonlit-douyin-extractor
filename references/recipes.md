@@ -1,153 +1,93 @@
-# 常用调用模式
+# 常用调用
 
-本 Skill 入口是 `scripts/run.sh`（薄壳）和 `node scripts/src/extract.mjs`（主程序）。下面是从调用方视角的常见模式。
+所有账号范围操作都显式使用 `--account <别名>`。别名只用于本机 profile 和数据目录，与抖音昵称无关。
 
-## 前置：确认环境
+## 首次安装与绑定
 
 ```bash
-# 1. 确认 Node ≥ 22
-node --version
-
-# 2. 装依赖（首次）
-#    假设你在 Skill 根目录跑（即 SKILL.md 所在目录）；scripts/ 是其子目录
 cd scripts
-npm install    # 或 pnpm install
-
-# 3. 首次跑：扫码登录
-node src/extract.mjs --account _default --login-only
-#  → 弹 headed Chromium 窗口 → 扫一下码 → 关窗 → cookie 落 ~/.moonlit-creator/.auth/douyin/_default/
-
-# 4. 健康检查（确认 cookie 可用）
-node src/extract.mjs --account _default --auth-probe
-#  → stdout: [extract] 登录态: active
+npm install
+npx playwright install chromium
+node src/extract.mjs --accounts
+node src/extract.mjs --account main --login-only
 ```
 
-> 如果你把 Skill clone 到别的目录（不是 moonlit-skills 仓库内的 `skills/moonlit-douyin-extractor/`），所有 `cd scripts` 仍然指向相对位置——本 Skill 不假设任何绝对路径。
+扫码成功后会先核验创作者中心身份，再绑定 `main`。如同一抖音身份已绑到别的别名，操作会停止且不创建重复绑定。
 
-## 1. 首次全量采（指标 + 评论）
+## 单账号采集
 
 ```bash
-node src/extract.mjs --account _default
+# 全量指标和评论
+node src/extract.mjs --account main
+
+# 只刷新指标
+node src/extract.mjs --account main --no-comments
+
+# 只抓评论
+node src/extract.mjs --account main --comments-only
+
+# 单作品重采
+node src/extract.mjs --account main --aweme 7523456789012345678 --force
+
+# 只重试上次失败的作品
+node src/extract.mjs --account main --resume
+
+# 登录态及稳定身份探针，不采集
+node src/extract.mjs --account main --auth-probe
 ```
 
-行为：
-- 自动检测 cookie 存在 + creator/user/info 返回 0；不满足 → 报错先扫码
-- 拉全部可见作品（约 1-3 页，≤ 40 作品）
-- 每个作品写 `meta.json` + `metrics.json` + `comments.json`
-- 末尾重写 `_index.json`
-- stdout 输出：`[done] 已完成 23 个作品的指标 +327 条评论`
+重复运行会追加指标历史并按 `commentId` 合并评论。只有明确要求时才使用 `--force` 覆盖单作品已有指标/评论。
 
-预计时长：24 作品 ≈ 2 分钟（评论含翻页限流，4s/页）。
+## 顺序刷新多个账号
 
-## 2. 只刷指标（不抓评论）
+用户明确要求更新所有已绑定账号时：
 
 ```bash
-node src/extract.mjs --account _default --no-comments
+node src/extract.mjs --all-accounts
+node src/extract.mjs --all-accounts --no-comments
+node src/extract.mjs --all-accounts --resume
 ```
 
-适合每天跑：评论上一次抓过了，今天先看指标增量。
+命令按注册表顺序逐个启动独立子进程，每个子进程先核验该别名的 profile 身份，再写入该别名的输出根。一个账号失败后继续处理后续账号，最终以非零退出码和逐账号日志报告失败数。登录、身份绑定、单作品重采和健康探针必须逐账号执行。
 
-## 3. 只刷评论（指标上次已抓过）
+## 自定义输出目录
 
 ```bash
-node src/extract.mjs --account _default --comments-only
+# 为当前账号指定一个新的空目录
+node src/extract.mjs --account main --root /path/to/douyin-data/main
+
+# 批量时将这个目录作为基路径，脚本会在下面追加每个账号别名
+node src/extract.mjs --all-accounts --root /path/to/douyin-data
 ```
 
-适合凌晨跑评论 + 早上看指标。
+每个输出根首次使用时会写 `_account.json` 归属标记。目录已有未标记历史文件时拒绝自动接管；目录已归属其他别名时拒绝写入。为旧数据选择新目录可保留原数据，不会静默迁移或覆盖。
 
-## 4. 单作品重采
+## 查看结果
 
 ```bash
-node src/extract.mjs --account _default --aweme 7523456789012345678 --force
+# 列出别名
+node src/extract.mjs --accounts
+
+# 当前账号索引
+cat ~/moonlit-creator/works/douyin/main/_index.json | jq .
+
+# 当前账号未归档作品
+ls ~/moonlit-creator/works/douyin/main/_unassigned/
+
+# 浏览失败记录
+find ~/moonlit-creator/works/douyin/main -name _FAILED.json -print
 ```
 
-`--force` 覆盖已有 `metrics.json` / `comments.json`。无 `--force` 时：
-- `meta.json` 始终覆盖（标题/发布时间可能微调）
-- `metrics.json` 追加到 `history[]`
-- `comments.json` 合并去重
+已映射 Workbase 作品的数据位于 `works/<year>/<work>/distribution/douyin/<别名>/<awemeId>/`。每个别名有自己的索引，即使同一条 Workbase 作品包含不同账号发布的数据也不会共用目录。
 
-## 5. 续跑失败的
+## 恢复方式
 
-```bash
-node src/extract.mjs --account _default --resume
-```
-
-只处理 `_FAILED.json` 的作品，未失败的不动。
-
-## 6. 自定义账号 / 登录态路径
-
-```bash
-# 多账号：accountId = 'creator-account-2'
-node src/extract.mjs --account creator-account-2
-
-# 自定义 profile 路径（默认 ~/.moonlit-creator/.auth/douyin/<account> 下）
-node src/extract.mjs --account ID --auth-dir /custom/path/to/profile
-```
-
-## 7. 只探针登录态（不开抓）
-
-```bash
-node src/extract.mjs --account _default --auth-probe
-```
-
-仅启动浏览器读 cookie + 探一次 `/aweme/v1/creator/user/info/`，输出"已登录 / 会话过期 / 未登录"三态之一，立即退出。
-
-适合作为 cron 健康检查：
-- 已登录 → 0 退出码
-- 会话过期或未登录 → 非 0 退出码 → 触发告警
-
-## 8. 只扫码不抓（首次或重扫）
-
-```bash
-# 首次扫码
-node src/extract.mjs --account _default --login-only
-
-# 重扫（sessionid 过期后）
-node src/extract.mjs --account _default --login-only
-# 扫码完成后正常跑：node src/extract.mjs --account _default --resume
-```
-
-## 9. 关键作品刷新（手动运营）
-
-```bash
-# 给某作品加补充评论
-node src/extract.mjs --account _default --aweme 7523456789012345678 --comments-only
-```
-
-## 10. 输出验证
-
-```bash
-# 总览
-cat ~/moonlit-creator/works/douyin/_index.json | jq .
-
-# 单作品
-cat ~/moonlit-creator/works/douyin/7523456789012345678/metrics.json | jq .
-
-# 失败作品
-ls ~/moonlit-creator/works/douyin/*/_FAILED.json
-
-# 评论样本（看看月明收到的真实评论）
-jq '.items[0:3]' ~/moonlit-creator/works/douyin/7523456789012345678/comments.json
-```
-
-## 11. 与其他 Skill 串联
-
-```bash
-# 萃取 → 选题雷达的输入准备
-node src/extract.mjs --account _default
-# 接着（Agent 自动接管）：
-#   → 读 _index.json 拿到近期作品
-#   → 调 moonlit-topic-radar 让月明根据真实数据做本周选题
-```
-
-## 故障排查
-
-| 现象 | 排查 |
+| 现象 | 处理 |
 |---|---|
-| `登录态目录不存在` | 先跑 `--login-only` 扫码 |
-| `SingletonLock exists & process alive` | 关闭另一个 Chromium 实例（可能是 CreatorOS 或上一次的 Skill 没干净退出） |
-| `会话已过期（status_code=8）` | 重跑 `--login-only` 重扫 |
-| `评论 incomplete: true` | 限流撞冷却，等 5 分钟再跑 `--resume` |
-| `XHR 无响应` | 抖音端点变更（端点常量在 `scripts/src/metrics.mjs` 和 `comments.mjs` 顶部，按需调整） |
-| `_index.json` 缺失 | 本次 run 还没成功跑过 |
-| `metrics.json.history` 过长 | 定期手动归档（脚本暂不自动裁剪） |
+| 别名未绑定 | 选择该别名并执行 `--account <别名> --login-only` |
+| 登录过期 | 重新扫码；随后执行 `--resume` |
+| 当前身份与别名不符 | 不采集；确认目标账号后在隔离扫码环境重新绑定该别名 |
+| profile 正被使用 | 关闭持有它的 Chromium，再重试；不要删除活锁 |
+| 输出目录未标记或归属其他账号 | 选择空的账号专属 `--root`，不要把旧数据强行归到某账号 |
+| 评论不完整 | 保留 `incomplete` 与原因；稍后按用户要求恢复 |
+| 抖音页面或 XHR 变化 | 停止猜接口结果；核对当前页面和接口响应后再维护脚本 |

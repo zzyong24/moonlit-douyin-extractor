@@ -1,7 +1,6 @@
 // 月明·抖音萃取 · 纯函数解析器
 //
 // 这一组函数不碰浏览器 / 不碰文件系统。可单测。逻辑忠实移植自
-// Thirdspace-creator: frontend/src/server/ingestion/douyin-cdp.ts
 // 中的 parseWorkList / parseCommentList / deriveWorkTitle，简化为 standalone Node ESM，
 // 不依赖任何 TypeScript / pnpm monorepo。
 //
@@ -101,6 +100,28 @@ export function parseWorkList(json) {
       };
     })
     .filter((w) => w !== null);
+}
+
+/**
+ * Read the signed-in creator identity from an account/profile response.
+ * Binding requires a stable sec_uid; a display name or mutable Douyin ID alone is not enough.
+ */
+export function parseCreatorProfileIdentity(json) {
+  const root = (json ?? {}) || {};
+  const data = root.data || {};
+  const result = root.result || {};
+  const candidates = [
+    root.user_info, root.user, root.account_info, root.account, root.profile,
+    data.user_info, data.user, data.account_info, data.account, data.profile, data,
+    result.user_info, result.user, result.account_info, result.account, result.profile, result,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const nickname = str(candidate.nickname) || str(candidate.name);
+    const secUid = str(candidate.sec_uid) || str(candidate.sec_user_id);
+    if (nickname.trim() && secUid.trim()) return { nickname, secUid };
+  }
+  return null;
 }
 
 /**

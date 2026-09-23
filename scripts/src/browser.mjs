@@ -10,13 +10,11 @@
 
 import { chromium } from 'playwright';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { parseCreatorProfileIdentity } from './parsers.mjs';
 
 // ------------------------------------------------------------------
-// 错误类（与 CreatorOS douyin-errors.ts 语义对齐；standalone 实现）
+// 浏览器错误类
 // ------------------------------------------------------------------
 
 export class DouyinNotLoggedInError extends Error {
@@ -120,7 +118,7 @@ export async function openProfile(opts = /** @type {OpenOptions} */ ({})) {
   if (signal?.aborted) {
     throw new Error('aborted');
   }
-  // 反自动化标记 + 关闭 automation 开关（与 CreatorOS 同款）
+  // 减少自动化标记，使用可见或无头的独立 Chromium profile。
   const ctx = await chromium.launchPersistentContext(authDir, {
     headless,
     viewport: { width: 1440, height: 900 },
@@ -201,6 +199,39 @@ export async function probeSession(ctx) {
   }
 }
 
+/** Read and validate the identity tied to the currently open creator profile. */
+export async function readCreatorIdentity(ctx) {
+  const page = ctx.pages()[0] ?? (await ctx.newPage());
+  let identity = null;
+  const pending = [];
+  const onResponse = (response) => {
+    if (!/creator\/user\/info|user_info|account_info|profile/i.test(response.url())) return;
+    pending.push(response.json().then((json) => {
+      identity ??= parseCreatorProfileIdentity(json);
+    }).catch(() => {}));
+  };
+  page.on('response', onResponse);
+  try {
+    await page.goto(CREATOR_LOGIN_HOME, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    for (let attempt = 0; attempt < 8 && !identity; attempt += 1) {
+      const payload = await page.evaluate(async (url) => {
+        try {
+          const response = await fetch(url, { credentials: 'include' });
+          return await response.json();
+        } catch {
+          return null;
+        }
+      }, SESSION_PROBE_API).catch(() => null);
+      identity ??= parseCreatorProfileIdentity(payload);
+      if (!identity) await page.waitForTimeout(750);
+      if (pending.length) await Promise.allSettled([...pending]);
+    }
+    return identity;
+  } finally {
+    page.off('response', onResponse);
+  }
+}
+
 // ------------------------------------------------------------------
 // 扫码登录（主动）
 // ------------------------------------------------------------------
@@ -213,81 +244,23 @@ export async function probeSession(ctx) {
  */
 
 /**
- * 调用 ego-browser 的可见持久页面引导用户扫码登录抖音创作者中心。
- * 成功条件必须是抖音服务端接受该会话，不能只看本地 sessionid 是否存在
- * —— 失效 Cookie 仍会留在 profile，旧实现会第一轮就误判成功。
- *
- * 流程：
- *   1. 调用 ego-browser 的持久页面打开 CREATOR_LOGIN_HOME
- *   2. 每秒轮询 /aweme/v1/creator/user/info/
- *   3. status_code=0 后通过 CDP 读取抖音 Cookie
- *   4. 用 Playwright 打开本地 profile，注入 Cookie 并重新探针验证
- *   5. 超时返回 false；临时 Cookie 文件在 finally 中清理
+ * Launch a visible, isolated Playwright profile for QR login.
+ * The caller supplies a new staging directory so an old account session cannot
+ * short-circuit the QR flow. Only a server-accepted session counts as success.
  */
 export async function loginDouyinProfile(opts = /** @type {LoginOptions} */ ({})) {
   const { authDir, timeoutSec = 240 } = opts;
-  // 登录阶段使用 ego-browser 的可见页面，避免 NomiFun 后台进程启动的
-  // Playwright headed Chromium 窗口一闪而过、但没有出现在用户桌面。
-  const tempDir = await mkdtemp(join(tmpdir(), 'moonlit-douyin-ego-'));
-  const cookieFile = join(tempDir, 'cookies.json');
-  const egoScript = `
-    const { writeFile } = await import('node:fs/promises');
-    const task = await taskSpace('moonlit-douyin-login');
-    const page = task.page('p1');
-    await page.goto('https://creator.douyin.com/creator-micro/home', {
-      waitUntil: 'domcontentloaded', timeout: 30000,
-    }).catch(() => {});
-    for (let i = 0; i < ${Math.max(1, Number(timeoutSec) || 240)}; i++) {
-      const status = await page.evaluate(async () => {
-        try {
-          const response = await fetch(
-            'https://creator.douyin.com/aweme/v1/creator/user/info/',
-            { credentials: 'include' },
-          );
-          const json = await response.json();
-          return json?.status_code ?? null;
-        } catch { return null; }
-      }).catch(() => null);
-      if (status === 0) {
-        const result = await page.cdp('Network.getAllCookies');
-        const cookies = (result?.cookies ?? [])
-          .filter((c) => /(?:^|\\.)douyin\\.com$/.test(c.domain))
-          .map(({ name, value, domain, path, expires, httpOnly, secure, sameSite }) => ({
-            name, value, domain, path, expires, httpOnly, secure, sameSite,
-          }));
-        await writeFile(${JSON.stringify(cookieFile)}, JSON.stringify(cookies));
-        console.log('__MOONLIT_EGO_LOGIN_OK__');
-        process.exit(0);
-      }
+  const ctx = await openProfile({ authDir, headless: false });
+  try {
+    const page = ctx.pages()[0] ?? (await ctx.newPage());
+    await page.goto(CREATOR_LOGIN_HOME, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    for (let attempt = 0; attempt < Math.max(1, Number(timeoutSec) || 240); attempt += 1) {
+      if ((await probeCreatorSession(page)) === 'active') return true;
       await page.waitForTimeout(1000);
     }
-    process.exit(5);
-  `;
-  try {
-    await new Promise((resolve, reject) => {
-      const child = spawn('ego-browser', ['nodejs'], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      let stderr = '';
-      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-      child.once('error', reject);
-      child.once('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(stderr.trim() || `ego-browser 登录退出码 ${code}`));
-      });
-      child.stdin.end(egoScript);
-    });
-
-    const cookies = JSON.parse(await readFile(cookieFile, 'utf8'));
-    const ctx = await openProfile({ authDir, headless: true });
-    try {
-      await ctx.addCookies(cookies);
-      return (await probeSession(ctx)) === 'active';
-    } finally {
-      await ctx.close().catch(() => {});
-    }
+    return false;
   } finally {
-    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await ctx.close().catch(() => {});
   }
 }
 

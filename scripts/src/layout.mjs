@@ -11,7 +11,8 @@
 //   - _index.json 每次 run 末尾重写
 
 import { mkdir, readFile, writeFile, readdir, stat } from 'node:fs/promises';
-import { join, dirname, relative } from 'node:path';
+import { basename, join, dirname, relative, resolve } from 'node:path';
+import { validateAccountId } from './accounts.mjs';
 
 // ------------------------------------------------------------------
 // 工具
@@ -34,11 +35,14 @@ async function writeJson(path, obj) {
   await writeFile(path, JSON.stringify(obj, null, 2) + '\n', 'utf8');
 }
 
-// 把抖音作品归档到 moonlit-creator 的真实作品目录。
-// root 仍保留为索引根（works/douyin），但数据本体进入
-// works/2026/W-.../distribution/douyin/，避免 awemeId 成为唯一入口。
-export async function resolveWorkDir(root, awemeId, title = '') {
-  const worksRoot = dirname(root);
+// Keep the index/unassigned data under the per-account root. When the usual
+// moonlit-creator work tree is present, put each account's data in its own
+// distribution/douyin/<accountId>/ namespace. Match only by stable awemeId;
+// titles are not unique identities.
+export async function resolveWorkDir(root, awemeId, _title = '', accountId = '_default') {
+  validateAccountId(accountId);
+  const possibleWorksRoot = resolve(root, '../..');
+  const worksRoot = basename(possibleWorksRoot) === 'works' ? possibleWorksRoot : dirname(root);
   let years = [];
   try { years = await readdir(worksRoot, { withFileTypes: true }); } catch {}
   for (const year of years) {
@@ -50,10 +54,7 @@ export async function resolveWorkDir(root, awemeId, title = '') {
       const workPath = join(worksRoot, year.name, entry.name);
       const work = await readJsonSafe(join(workPath, 'work.json'), null);
       const ids = work?.platformIds?.douyin ?? work?.distributionIds?.douyin ?? [];
-      if (ids.includes(awemeId)) return join(workPath, 'distribution', 'douyin');
-      if (title && work?.title && (title.includes(work.title) || work.title.includes(title))) {
-        return join(workPath, 'distribution', 'douyin');
-      }
+      if (ids.includes(awemeId)) return join(workPath, 'distribution', 'douyin', accountId);
     }
   }
   // 未建立作品映射的历史视频也不再散落成数字目录，集中等待人工归档。
@@ -241,7 +242,7 @@ export async function writeIndex(root, payload) {
   await ensureDir(root);
   const works = [];
   for (const work of payload.works ?? []) {
-    const dir = await resolveWorkDir(root, work.awemeId, work.title ?? '');
+    const dir = await resolveWorkDir(root, work.awemeId, work.title ?? '', payload.accountId);
     works.push({ ...work, path: relative(root, join(dir, work.awemeId)) + '/' });
   }
   await writeJson(join(root, '_index.json'), {

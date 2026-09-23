@@ -16,6 +16,7 @@ import {
   readHasMore,
   deriveTitle,
   toIsoFromUnixSeconds,
+  parseCreatorProfileIdentity,
   DERIVED_TITLE_MAX,
 } from './parsers.mjs';
 
@@ -151,6 +152,20 @@ test('数字字段是字符串也能解析（去逗号、去空白）', () => {
   const w = parseWorkList(json)[0];
   assert.equal(w.stats.views, 128000);
   assert.equal(w.stats.likes, 5400);
+});
+
+console.log('parseCreatorProfileIdentity');
+
+test('从创作者账号资料抽出稳定身份', () => {
+  assert.deepEqual(
+    parseCreatorProfileIdentity({ data: { user_info: { nickname: '账号甲', sec_uid: 'stable-a' } } }),
+    { nickname: '账号甲', secUid: 'stable-a' },
+  );
+});
+
+test('不以昵称或可变抖音号冒充稳定身份', () => {
+  assert.equal(parseCreatorProfileIdentity({ data: { user: { nickname: '账号甲', unique_id: 'douyin-a' } } }), null);
+  assert.equal(parseCreatorProfileIdentity({ data: { user: { sec_uid: 'stable-a' } } }), null);
 });
 
 // ============================================================

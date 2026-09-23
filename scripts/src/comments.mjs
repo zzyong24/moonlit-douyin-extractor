@@ -4,7 +4,7 @@
 //            → 翻页（限流 sleep 4s/页）→ 写 comments.json
 // 批量路径：在单个 context 串行抓多个作品（open/close 只一次）
 //
-// 真机踩过的坑（已与 CreatorOS 对齐）：
+// 评论采集的边界处理：
 //   - 评论管理页 URL：https://creator.douyin.com/creator-micro/interactive/comment?item_id=<id>
 //     旧 URL content/comment-manage 已被抖音改向到 content/upload，不触发评论接口
 //   - item_id 过滤偶发不生效：每条评论按 payload 自带 aweme_id 归属（旧实现误把整批归到目标作品）
@@ -108,11 +108,12 @@ export async function fetchCommentsForWork({
   awemeId,
   signal,
   root,
+  accountId,
   capturedAt,
   force = false,
 }) {
   const meta = await readMeta(root, awemeId);
-  const workDir = await resolveWorkDir(root, awemeId, meta?.title ?? '');
+  const workDir = await resolveWorkDir(root, awemeId, meta?.title ?? '', accountId);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   let incomplete = false;
   let truncatedReason = null;
@@ -160,6 +161,7 @@ export async function fetchCommentsForWorks({
   awemeIds,
   signal,
   root,
+  accountId,
   capturedAt,
   force = false,
 }) {
@@ -170,7 +172,8 @@ export async function fetchCommentsForWorks({
 
   for (const awemeId of awemeIds) {
     if (signal?.aborted) throw new Error('aborted');
-    const workDir = join(root, awemeId);
+    const meta = await readMeta(root, awemeId);
+    const workDir = await resolveWorkDir(root, awemeId, meta?.title ?? '', accountId);
     let incomplete = false;
     let reason = null;
     let records = [];
