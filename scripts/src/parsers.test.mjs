@@ -17,6 +17,7 @@ import {
   deriveTitle,
   toIsoFromUnixSeconds,
   parseCreatorProfileIdentity,
+  parseCreatorWorkListIdentity,
   DERIVED_TITLE_MAX,
 } from './parsers.mjs';
 
@@ -166,6 +167,15 @@ test('从创作者账号资料抽出稳定身份', () => {
 test('不以昵称或可变抖音号冒充稳定身份', () => {
   assert.equal(parseCreatorProfileIdentity({ data: { user: { nickname: '账号甲', unique_id: 'douyin-a' } } }), null);
   assert.equal(parseCreatorProfileIdentity({ data: { user: { sec_uid: 'stable-a' } } }), null);
+});
+
+console.log('parseCreatorWorkListIdentity');
+test('从自己的作品列表作者字段抽取稳定身份', () => {
+  assert.deepEqual(
+    parseCreatorWorkListIdentity({ aweme_list: [{ author: { nickname: '账号甲', sec_uid: 'stable-a' } }] }),
+    { nickname: '账号甲', secUid: 'stable-a' },
+  );
+  assert.equal(parseCreatorWorkListIdentity({ aweme_list: [{ author: { nickname: '账号甲' } }] }), null);
 });
 
 // ============================================================

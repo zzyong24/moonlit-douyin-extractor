@@ -11,7 +11,7 @@
 import { chromium } from 'playwright';
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseCreatorProfileIdentity } from './parsers.mjs';
+import { parseCreatorProfileIdentity, parseCreatorWorkListIdentity } from './parsers.mjs';
 
 // ------------------------------------------------------------------
 // 浏览器错误类
@@ -142,7 +142,9 @@ export async function openProfile(opts = /** @type {OpenOptions} */ ({})) {
 
 const CREATOR_HOME = 'https://creator.douyin.com/';
 const CREATOR_LOGIN_HOME = 'https://creator.douyin.com/creator-micro/home';
+const CREATOR_WORKS_HOME = 'https://creator.douyin.com/creator-micro/content/manage';
 const SESSION_PROBE_API = 'https://creator.douyin.com/aweme/v1/creator/user/info/';
+const WORK_LIST_HINTS = ['/aweme/v1/creator/item/list', '/creator/pc/work_list', '/web/aweme/post'];
 
 /**
  * 只读：检查 .auth/<accountId>/ 是否有 sessionid / sessionid_ss cookie。
@@ -205,14 +207,25 @@ export async function readCreatorIdentity(ctx) {
   let identity = null;
   const pending = [];
   const onResponse = (response) => {
-    if (!/creator\/user\/info|user_info|account_info|profile/i.test(response.url())) return;
+    const url = response.url();
+    const isProfile = /creator\/user\/info|user_info|account_info|profile/i.test(url);
+    const isWorkList = WORK_LIST_HINTS.some((hint) => url.includes(hint));
+    if (!isProfile && !isWorkList) return;
     pending.push(response.json().then((json) => {
-      identity ??= parseCreatorProfileIdentity(json);
+      identity ??= isWorkList
+        ? parseCreatorWorkListIdentity(json)
+        : parseCreatorProfileIdentity(json);
     }).catch(() => {}));
   };
   page.on('response', onResponse);
   try {
     await page.goto(CREATOR_LOGIN_HOME, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+    if (!identity) {
+      await page.goto(CREATOR_WORKS_HOME, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
+      await page.waitForTimeout(3000);
+    }
+    if (pending.length) await Promise.allSettled([...pending]);
     for (let attempt = 0; attempt < 8 && !identity; attempt += 1) {
       const payload = await page.evaluate(async (url) => {
         try {

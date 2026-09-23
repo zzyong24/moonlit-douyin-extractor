@@ -32,7 +32,7 @@ node scripts/src/extract.mjs --account studio-b --login-only
 流程：
 
 1. 创建独立临时 profile 并打开创作者中心二维码。
-2. 等待抖音服务端确认登录，再读取创作者账号资料。
+2. 等待抖音服务端确认登录，优先读取创作者主页的账号资料响应；资料接口不含身份时，再从本人作品列表响应读取作者身份。
 3. 必须读取到昵称和稳定 `sec_uid`，否则不创建绑定。
 4. 对 `sec_uid` 计算 SHA-256 指纹，拒绝同一身份绑定到多个别名。
 5. 只有身份检查通过后，才将 profile 原子归入 `~/.moonlit-creator/.auth/douyin/studio-b/` 并写入注册表。

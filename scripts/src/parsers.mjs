@@ -124,6 +124,24 @@ export function parseCreatorProfileIdentity(json) {
   return null;
 }
 
+/** Read the logged-in creator identity from their own creator-center work list. */
+export function parseCreatorWorkListIdentity(json) {
+  const root = (json ?? {}) || {};
+  const data = root.data || {};
+  const lists = [root.aweme_list, root.item_list, data.aweme_list, data.item_list];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const author = item?.author || item?.user || item?.user_info;
+      if (!author || typeof author !== 'object' || Array.isArray(author)) continue;
+      const nickname = str(author.nickname) || str(author.name);
+      const secUid = str(author.sec_uid) || str(author.sec_user_id);
+      if (nickname.trim() && secUid.trim()) return { nickname, secUid };
+    }
+  }
+  return null;
+}
+
 /**
  * work_list 顶层的 has_more 字段兜底抽取
  * @param {unknown} json
