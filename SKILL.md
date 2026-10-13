@@ -4,7 +4,7 @@ description: Use when someone wants to bind their own Douyin creator accounts, c
 metadata:
   display_name: 月明·抖音萃取
   icon: icon.svg
-  updated: "2026-09-23"
+  updated: "2026-10-04"
 ---
 
 # 🌙 月明·抖音萃取
@@ -42,11 +42,16 @@ metadata:
 
 作品列表读取指标与作品元数据；评论采集按作品执行。所有数值来自平台当前返回，缺失字段保留空/缺，不伪造为真实的 0。重复采集追加指标历史、按评论 ID 合并评论；单作品重采需用户明确要求覆盖。
 
+当前创作者中心采用 `/aweme/v1/creator/comment/list/` 与 `comment_info_list`；旧 web 接口仍兼容。新接口的加密作品 ID 必须通过真实 `item_id_plain` 映射核对，不能用标题归属。等实际评论响应后才翻页，展开回复只操作“查看…条回复”等读取控件。
+
+完成数、尝试数、顶层范围和回复范围分开报告；无响应、翻页未完或回复缺口保存续采标记，不能把走过页面计为完成。`--comments-only --aweme ID` 不刷新指标、不缩减全账号索引。`--resume` 没有失败目标则不发评论请求；部分完成退出码为 6，旧数据仍保留。
+
 会话过期时立即停止后续请求，已完成作品保留，失败作品记录原因。重新扫码后通过 `--resume` 只重跑标记失败的作品。Profile 被另一个 Chromium 进程占用时拒绝并发打开，不强删活锁。
 
 ## 依赖与数据位置
 
 - Node.js 22+、Playwright 和 Playwright Chromium。按 [认证与账号说明](references/auth-setup.md) 首次安装；扫码使用 Playwright 打开的本机可见窗口。
+- 宿主用内容哈希快照锁定 Skill 时，不在快照内安装或编辑依赖。优先使用宿主提供的依赖运行时；已有维护源安装可作执行入口，但必须先核对其完整内容哈希与当前锁相同，任何差异都停止该入口，不能静默执行新源码。脚本和规则仍以锁定版本为准，依赖目录不作为内容事实证据。
 - 登录目录与账号注册表默认在 `~/.moonlit-creator/.auth/douyin/`；注册表保存在 `accounts.json`，profile 按别名分目录。
 - 每账号默认输出到 `~/moonlit-creator/works/douyin/<别名>/`，包含自己的 `_index.json`、运行记录和未匹配作品。已映射的 Workbase 作品在其作品目录中增加别名子目录。
 - Cookie、身份指纹、评论和指标都可能属于敏感数据；这些是运行期本机数据，不属于 Skill 或开源仓库。

@@ -146,6 +146,7 @@ export async function fetchAllWorksMetrics({
     }
   }
   for (const w of byId.values()) works.push(w);
+  if (!works.length) throw new Error('未解析到任何作品指标：检查页面是否加载、接口字段是否变化；不覆盖旧索引或写入零值');
 
   // 落盘每个作品
   const summary = [];
@@ -183,7 +184,7 @@ export async function fetchAllWorksMetrics({
         },
         { force },
       );
-      await clearFailure(workDir);
+      await clearFailure(workDir, 'metrics');
       summary.push({
         awemeId: w.awemeId,
         title,

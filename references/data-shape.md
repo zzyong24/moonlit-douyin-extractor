@@ -74,8 +74,9 @@
 |---|---|
 | `awemeId` | 必填，对应作品 |
 | `collectedAt` | 本次抓取时刻 ISO |
-| `incomplete` | `boolean`，是否完整抓完该作品所有评论 |
+| `incomplete` | `boolean`，本次声明的顶层范围是否未完成；展开回复完整性独立 |
 | `truncatedReason` | `string \| null`，截断原因（如"撞冷却截断：已采 X/Y"） |
+| `coverage` | 顶层has_more/cursor、响应页数、滚动轮数及预算；回复范围另记 |
 | `count` | `items.length` |
 | `items` | 评论数组 |
 

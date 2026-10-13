@@ -26,11 +26,14 @@ node src/extract.mjs --account main --no-comments
 # 只抓评论
 node src/extract.mjs --account main --comments-only
 
-# 单作品重采
+# 补采单作品评论（保留指标和其他作品索引）
+node src/extract.mjs --account main --comments-only --aweme 7523456789012345678 --max-pages 10
+
+# 仅在用户明确要求覆盖时重采
 node src/extract.mjs --account main --aweme 7523456789012345678 --force
 
 # 只重试上次失败的作品
-node src/extract.mjs --account main --resume
+node src/extract.mjs --account main --comments-only --resume --max-pages 10
 
 # 登录态及稳定身份探针，不采集
 node src/extract.mjs --account main --auth-probe

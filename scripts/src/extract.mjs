@@ -49,6 +49,7 @@ import {
   listFailedWorks,
   readMeta,
   resolveWorkDir,
+  readCommentTargets,
 } from './layout.mjs';
 
 // ------------------------------------------------------------------
@@ -324,8 +325,12 @@ async function main() {
     const maxPages = args.maxPages ?? undefined;
 
     // 决定目标作品集
-    let targetWorks = []; // [{awemeId, title, publishedAt, shareUrl, metrics?}]
-    if (args.aweme) {
+    let targetWorks = []; // full index, including untouched videos
+    let commentsTruncated = false;
+    let metricsWritten = 0;
+    let commentsRun = null;
+    const existingIndex = await readMetaIndex(root);
+    if (args.aweme && !args.commentsOnly) {
       // 单作品路径：metrics + comments 一并
       console.log(`[extract] 单作品模式: ${args.aweme}`);
       const { works } = await fetchAllWorksMetrics({
@@ -336,13 +341,14 @@ async function main() {
         force,
         maxPages,
       });
+      metricsWritten = works.length;
       targetWorks = works.filter((w) => w.awemeId === args.aweme);
       if (targetWorks.length === 0) {
         console.warn(`[extract] 作品列表中未找到 ${args.aweme}（可能不在最近 40 页内）`);
         // 仍尝试写 meta（用已知 awemeId）+ 走评论（不依赖 work_list）
       }
       if (targetWorks.length === 0) {
-        await writeMeta(await resolveWorkDir(root, args.aweme, '', accountId), {
+        if (!await readMeta(root, args.aweme)) await writeMeta(await resolveWorkDir(root, args.aweme, '', accountId), {
           awemeId: args.aweme,
           title: '',
           desc: '',
@@ -360,17 +366,20 @@ async function main() {
         }];
       }
       if (!args.noComments) {
-        const { results } = await fetchCommentsForWorks({
+        const commentResult = await fetchCommentsForWorks({
           ctx,
           awemeIds: [args.aweme],
+          maxPages,
           capturedAt,
           root,
           accountId,
           force,
         });
-        const r = results[0];
+        commentsRun = commentResult;
+        commentsTruncated = commentResult.truncated;
+        const r = commentResult.results[0];
         if (r) {
-          targetWorks[0].commentsCount = r.records.length;
+          targetWorks[0].commentsCount = r.storedCount;
           targetWorks[0].commentsIncomplete = r.incomplete;
         }
       }
@@ -386,55 +395,52 @@ async function main() {
           force,
           maxPages,
         });
-        targetWorks = works;
+        metricsWritten = works.length;
+        targetWorks = works.map(w=>({...existingIndex?.works?.find(old=>old.awemeId===w.awemeId),...w}));
         awemeIds = works.map((w) => w.awemeId);
         console.log(
           `[extract] 指标抓取完成: ${works.length} 个作品 (扫了 ${pagesScanned} 页, hasMore-truncated=${truncatedByHasMore})`,
         );
       } else {
         awemeIds = await collectExistingAwemeIds(root);
+        if (args.aweme && !awemeIds.includes(args.aweme)) awemeIds.push(args.aweme);
+        targetWorks = await readCommentTargets(root, accountId, awemeIds);
         console.log(`[extract] comments-only: 现有 ${awemeIds.length} 个作品`);
       }
+
+      if (args.aweme) awemeIds = awemeIds.filter(id=>id===args.aweme);
 
       // 处理 resume：只重跑 _FAILED.json 的作品
       if (args.resume) {
         const failedIds = await listFailedWorks(root);
         if (failedIds.length === 0) {
           console.log('[extract] resume: 没有失败作品，跳过');
+          awemeIds = [];
         } else {
           console.log(`[extract] resume: 重试 ${failedIds.length} 个失败作品`);
-          if (!args.commentsOnly) {
-            const { works: reworks } = await fetchAllWorksMetrics({
-              ctx,
-              capturedAt,
-              root,
-              accountId,
-              force: true,
-              maxPages,
-            });
-            targetWorks = reworks;
-            awemeIds = reworks.map((w) => w.awemeId);
-          } else {
-            awemeIds = awemeIds.filter((id) => failedIds.includes(id));
-          }
+          awemeIds = awemeIds.filter((id) => failedIds.includes(id));
         }
       }
 
       if (!args.noComments && awemeIds.length > 0) {
-        const { results, truncated, truncatedReason } = await fetchCommentsForWorks({
+        commentsRun = await fetchCommentsForWorks({
           ctx,
           awemeIds,
+          maxPages,
           capturedAt,
           root,
           accountId,
           force,
         });
+        const {results, truncated, truncatedReason} = commentsRun;
+        commentsTruncated = truncated;
+        const topCompleted = results.filter(r=>r.coverage.top_complete).length;
         const totalComments = results.reduce(
           (s, r) => s + r.records.length,
           0,
         );
         console.log(
-          `[extract] 评论抓取完成: ${results.length}/${awemeIds.length} 个作品, ${totalComments} 条评论 (truncated=${truncated})`,
+          `[extract] 评论读取: 尝试 ${results.length}/${awemeIds.length}，顶层完成 ${topCompleted}，本次读到 ${totalComments} 条；回复范围见回执 (truncated=${truncated})`,
         );
         if (truncated && truncatedReason) {
           console.warn(`[extract] 截断原因: ${truncatedReason}`);
@@ -445,12 +451,18 @@ async function main() {
         for (const w of targetWorks) {
           const c = commentsByAweme.get(w.awemeId);
           if (c) {
-            w.commentsCount = c.records.length;
+            w.commentsCount = c.storedCount;
+            w.commentsCoverage = c.coverage;
             w.commentsIncomplete = c.incomplete;
           }
         }
       }
     }
+
+    // A targeted read must not drop the other stable video IDs from the index.
+    const indexed = new Map((existingIndex?.works ?? []).map(w=>[w.awemeId,w]));
+    for (const w of targetWorks) indexed.set(w.awemeId,{...indexed.get(w.awemeId),...w});
+    targetWorks = [...indexed.values()];
 
     // 写 _index.json
     await writeIndex(root, {
@@ -465,11 +477,14 @@ async function main() {
       works: targetWorks,
     });
 
-    console.log('[done] 已完成');
+    if (commentsTruncated) exitCode = 6;
+    console.log(commentsTruncated ? '[partial] 评论范围未完成，已保存读取结果和续采标记' : '[done] 本次请求范围完成（回复覆盖见回执）');
     const summary = {
       accountId,
       root,
-      metricsWritten: targetWorks.length,
+      metricsWritten,
+      status:commentsTruncated ? 'partial' : 'requested_scope_complete',
+      commentScope:commentsRun?.results.map(r=>({awemeId:r.awemeId,coverage:r.coverage,incomplete:r.incomplete})) ?? [],
       commentsWritten: targetWorks.reduce(
         (s, w) => s + (w.commentsCount ?? 0),
         0,

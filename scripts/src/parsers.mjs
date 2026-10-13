@@ -19,6 +19,12 @@ function num(v) {
   return 0;
 }
 
+function metricNumber(v) {
+  if (v == null || (typeof v === 'string' && !v.trim()) || !['number','string'].includes(typeof v)) return null;
+  const n = typeof v === 'number' ? v : Number(v.replace(/[,\s]/g, ''));
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 function str(v) {
   return typeof v === 'string' ? v : '';
 }
@@ -91,11 +97,11 @@ export function parseWorkList(json) {
         durationSec:
           Math.round(num(video.duration) / 1000) || num(video.duration),
         stats: {
-          views: num(s.play_count ?? s.play ?? s.vv),
-          likes: num(s.digg_count ?? s.like_count ?? s.digg),
-          comments: num(s.comment_count ?? s.comment),
-          shares: num(s.share_count ?? s.share),
-          favorites: num(s.collect_count ?? s.favorite_count ?? s.collect),
+          views: metricNumber(s.play_count ?? s.play ?? s.vv),
+          likes: metricNumber(s.digg_count ?? s.like_count ?? s.digg),
+          comments: metricNumber(s.comment_count ?? s.comment),
+          shares: metricNumber(s.share_count ?? s.share),
+          favorites: metricNumber(s.collect_count ?? s.favorite_count ?? s.collect),
         },
       };
     })
@@ -192,14 +198,15 @@ export function parseCommentList(json, defaultAwemeId = '') {
       if (!raw || typeof raw !== 'object') return null;
       const commentId = str(raw.cid) || str(raw.comment_id) || str(raw.id);
       const text = str(raw.text) || str(raw.content);
-      if (!commentId || !text.trim()) return null;
+      if (!commentId || (!text.trim() && !raw.image_list?.length && !raw.video_list?.length && !num(raw.reply_comment_total ?? raw.reply_count))) return null;
       const user = raw.user || raw.user_info || {};
       return {
         commentId,
         awemeId: str(raw.aweme_id) || str(raw.item_id) || defaultAwemeId,
         text,
+        ...(text.trim() ? {} : {contentKind:'non_text'}),
         likeCount: num(raw.digg_count ?? raw.like_count),
-        replyCount: num(raw.reply_comment_total ?? raw.reply_count),
+        replyCount: metricNumber(raw.reply_comment_total ?? raw.reply_count),
         createTime: num(raw.create_time),
         userId: str(user.uid) || str(user.user_id) || str(raw.user_id),
         userName:
@@ -208,4 +215,19 @@ export function parseCommentList(json, defaultAwemeId = '') {
       };
     })
     .filter((c) => c !== null);
+}
+
+// The creator endpoint has opaque comment IDs and no aweme_id on each row.
+// Only call after matching its requested item_id to item_id_plain in the
+// authenticated creator item list. Never use the title to assign ownership.
+export function parseCreatorComments(json, awemeId, parentCommentId = null) {
+  const data = json?.data ?? json ?? {};
+  return (Array.isArray(data.comment_info_list) ? data.comment_info_list : [])
+    .filter(raw=>raw && typeof raw.comment_id === 'string' && raw.comment_id)
+    .map(raw=>({commentId:raw.comment_id,awemeId,text:str(raw.text),
+      likeCount:metricNumber(raw.digg_count),replyCount:metricNumber(raw.reply_count),
+      createTime:num(raw.create_time),userId:str(raw.user_info?.user_id),
+      userName:str(raw.user_info?.screen_name),ipLabel:'',parentCommentId,
+      level:parentCommentId ? 2 : 1,idNamespace:'creator_opaque',
+      contentKind:str(raw.text).trim() ? 'text' : 'non_text'}));
 }

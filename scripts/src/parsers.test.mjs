@@ -104,8 +104,13 @@ test('item_list 顶层 + 字段 key 兜底（play vs play_count）', () => {
   assert.equal(out[0].stats.views, 100);
   assert.equal(out[0].stats.likes, 5);
   assert.equal(out[0].stats.favorites, 2);
-  assert.equal(out[0].stats.shares, 0);
-  assert.equal(out[0].stats.comments, 0);
+  assert.equal(out[0].stats.shares, null);
+  assert.equal(out[0].stats.comments, null);
+});
+
+test('missing metrics remain null while explicit zero is preserved', () => {
+  const w = parseWorkList({aweme_list:[{aweme_id:'x',statistics:{play_count:0,digg_count:2,share_count:'',comment_count:'invalid'}}]})[0];
+  assert.deepEqual(w.stats,{views:0,likes:2,comments:null,shares:null,favorites:null});
 });
 
 test('嵌套 data.aweme_list', () => {
@@ -244,6 +249,11 @@ test('无 commentId 或 text 的脏数据丢弃', () => {
   const out = parseCommentList(json);
   assert.equal(out.length, 1);
   assert.equal(out[0].commentId, 'c1');
+});
+
+test('nontext comments with media or replies retain their real IDs', () => {
+ const rows=parseCommentList({comments:[{cid:'image',text:'',image_list:[{uri:'image'}],reply_comment_total:1}]},'123');
+ assert.equal(rows.length,1);assert.equal(rows[0].text,'');assert.equal(rows[0].contentKind,'non_text');assert.equal(rows[0].replyCount,1);
 });
 
 test('aweme_id 缺失回退 defaultAwemeId', () => {

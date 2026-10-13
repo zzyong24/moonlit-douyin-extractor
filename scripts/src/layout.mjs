@@ -10,7 +10,7 @@
 //   - 失败时只写 _FAILED.json，不动已成功写的文件
 //   - _index.json 每次 run 末尾重写
 
-import { mkdir, readFile, writeFile, readdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir, stat, realpath } from 'node:fs/promises';
 import { basename, join, dirname, relative, resolve } from 'node:path';
 import { validateAccountId } from './accounts.mjs';
 
@@ -33,6 +33,19 @@ async function readJsonSafe(path, fallback = null) {
 
 async function writeJson(path, obj) {
   await writeFile(path, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+}
+
+async function physicalPath(path) {
+  const suffix = [];
+  let ancestor = resolve(path);
+  for (;;) {
+    try { return join(await realpath(ancestor), ...suffix); }
+    catch (error) {
+      if (error.code !== 'ENOENT' || dirname(ancestor) === ancestor) throw error;
+      suffix.unshift(basename(ancestor));
+      ancestor = dirname(ancestor);
+    }
+  }
 }
 
 // Keep the index/unassigned data under the per-account root. When the usual
@@ -145,6 +158,18 @@ export async function writeComments(workDir, payload, opts = {}) {
     return { merged: false, length: payload.items.length };
   }
 
+  const oldNamespace=existing.items?.find(c=>c.idNamespace)?.idNamespace ?? existing.coverage?.id_namespace ?? 'web';
+  const newNamespace=payload.coverage?.id_namespace ?? 'web';
+  if (payload.items.length && oldNamespace!==newNamespace) {
+    // Numeric web IDs and creator opaque IDs cannot be treated as independent
+    // new comments or merged by text. Preserve the old observation unchanged.
+    const {alternateCollections=[],...oldObservation}=existing;
+    await writeJson(path,{...payload,count:payload.items.length,
+      lastAttemptAt:payload.collectedAt,idNamespaceChanged:true,
+      alternateCollections:[...alternateCollections,oldObservation]});
+    return {merged:false,length:payload.items.length,added:0,idNamespaceChanged:true};
+  }
+
   // 合并：按 commentId 去重；新评论 append；已存在但 likeCount 更高的更新
   const byId = new Map();
   for (const it of existing.items ?? []) {
@@ -170,9 +195,13 @@ export async function writeComments(workDir, payload, opts = {}) {
   const out = {
     ...existing,
     awemeId: payload.awemeId,
-    collectedAt: payload.collectedAt, // 始终刷新本次时间
+    collectedAt: !payload.items.length && payload.incomplete ? existing.collectedAt : payload.collectedAt,
+    lastAttemptAt: payload.collectedAt,
     incomplete: payload.incomplete,   // 最新一次抓取的结果
     truncatedReason: payload.truncatedReason,
+    coverage: payload.coverage ? {...payload.coverage, ...(!payload.items.length && payload.incomplete ? {id_namespace:oldNamespace,attempt_id_namespace:newNamespace} : {})} : existing.coverage,
+    lastSuccessfulCoverage: !payload.incomplete && payload.coverage?.reply_complete ? payload.coverage : existing.lastSuccessfulCoverage ?? (existing.coverage?.top_complete && existing.coverage?.reply_complete ? existing.coverage : null),
+    lastSuccessfulCollectedAt: !payload.incomplete && payload.coverage?.reply_complete ? payload.collectedAt : existing.lastSuccessfulCollectedAt ?? (existing.coverage?.top_complete && existing.coverage?.reply_complete ? existing.collectedAt : null),
     count: mergedItems.length,
     items: mergedItems,
   };
@@ -208,7 +237,11 @@ export async function writeFailure(workDir, failure) {
 /**
  * 成功后清除 _FAILED.json（避免下次看到上次失败的陈旧记录）。
  */
-export async function clearFailure(workDir) {
+export async function clearFailure(workDir, stage = null) {
+  if (stage) {
+    const failure=await readJsonSafe(join(workDir,'_FAILED.json'),null);
+    if (failure && failure.stage!==stage) return;
+  }
   const { unlink } = await import('node:fs/promises');
   try {
     await unlink(join(workDir, '_FAILED.json'));
@@ -240,10 +273,14 @@ export async function writeRun(workDir, payload) {
  */
 export async function writeIndex(root, payload) {
   await ensureDir(root);
+  // A migrated output root may be reached through a compatibility symlink.
+  // Relative links belong to the physical directory that stores the index.
+  const physicalRoot = await realpath(root);
   const works = [];
   for (const work of payload.works ?? []) {
     const dir = await resolveWorkDir(root, work.awemeId, work.title ?? '', payload.accountId);
-    works.push({ ...work, path: relative(root, dir) + '/' });
+    const physicalDir = await physicalPath(dir);
+    works.push({ ...work, path: relative(physicalRoot, physicalDir) + '/' });
   }
   await writeJson(join(root, '_index.json'), {
     updatedAt: new Date().toISOString(),
@@ -251,6 +288,27 @@ export async function writeIndex(root, payload) {
     totals: payload.totals,
     works,
   });
+}
+
+// Comments-only refresh must preserve the metric index. Recover a missing index
+// entry from stable-ID raw files; never infer work ownership from its title.
+export async function readCommentTargets(root, accountId, awemeIds) {
+  const index = await readJsonSafe(join(root, '_index.json'), null);
+  if (index?.accountId && index.accountId !== accountId) throw new Error('评论索引账号不匹配');
+  const known = new Map((index?.works ?? []).map(w => [w.awemeId, w]));
+  const targets = [];
+  for (const awemeId of awemeIds) {
+    if (known.has(awemeId)) { targets.push({ ...known.get(awemeId) }); continue; }
+    const dir = await resolveWorkDir(root, awemeId, '', accountId);
+    const meta = await readJsonSafe(join(dir, 'meta.json'), null);
+    const data = await readJsonSafe(join(dir, 'metrics.json'), null);
+    if (meta?.awemeId && meta.awemeId !== awemeId) throw new Error('评论目标平台ID不匹配');
+    if (meta?.accountId && meta.accountId !== accountId) throw new Error('评论目标账号不匹配');
+    targets.push({awemeId, title:meta?.title ?? '', publishedAt:meta?.publishedAt ?? null,
+      shareUrl:meta?.shareUrl ?? `https://www.douyin.com/video/${awemeId}`,
+      ...(data?.latest?.metrics ? {metrics:data.latest.metrics} : {})});
+  }
+  return targets;
 }
 
 // ------------------------------------------------------------------
@@ -270,7 +328,9 @@ export async function listFailedWorks(root) {
     for (const item of index.works) {
       if (!item?.path) continue;
       const meta = await readJsonSafe(join(root, item.path, '_FAILED.json'), null);
-      if (meta?.awemeId) failed.push(meta.awemeId);
+      const comments = await readJsonSafe(join(root,item.path,'comments.json'),null);
+      const pendingComments=comments && (comments.incomplete || comments.coverage?.reply_scope==='partial' || comments.coverage?.reply_scope==='not_collected');
+      if (meta?.awemeId || pendingComments) failed.push(meta?.awemeId ?? item.awemeId);
     }
     return failed;
   }
