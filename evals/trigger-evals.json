@@ -1,0 +1,20 @@
+[
+ {
+  "skill": "moonlit-douyin-extractor",
+  "query": "拉一下这个抖音账号的作品列表和点赞数据",
+  "should_trigger": true,
+  "expected": "Redfox 公开数据，先报价"
+ },
+ {
+  "skill": "moonlit-douyin-extractor",
+  "query": "对标账号最近 20 条抖音的数据给我",
+  "should_trigger": true,
+  "expected": "queryWorkList 报价后执行"
+ },
+ {
+  "skill": "moonlit-douyin-extractor",
+  "query": "把这条抖音转成文字稿",
+  "should_trigger": false,
+  "expected": "路由到 moonlit-douyin-transcribe"
+ }
+]

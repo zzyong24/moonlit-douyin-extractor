@@ -224,6 +224,10 @@ async function readMetaIndex(root) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (process.env.MOONLIT_DOUYIN_OWNER !== '1' && !args.help) {
+    console.error('登录态采集（B 段）只由月明本人在 Mac 上运行：需要 MOONLIT_DOUYIN_OWNER=1。团队 Bot 请用 scripts/redfox_public_metrics.py 取公开数据。');
+    process.exit(3);
+  }
   if (args.help) {
     printHelp();
     return;

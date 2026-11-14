@@ -1,6 +1,6 @@
 ---
 name: moonlit-douyin-extractor
-description: Use when someone wants to bind their own Douyin creator accounts, collect published-work metrics and comments, or run a verified sequential refresh across multiple accounts. This standalone Skill uses its own Playwright profiles and per-account JSON output; it does not depend on CreatorOS.
+description: "Use when 要把月明自己抖音作品的数据拉回来复盘：团队 Bot 用 Redfox 公开数据接口取播放、点赞、评论数等公开指标（先报价）；扫码绑定账号、登录态采集完播率等私有指标和评论全文只在月明本人 Mac 上由月明运行，Bot 不持有登录态。不用于采集他人隐私数据、批量爬取或做定时任务，也不负责发布。"
 metadata:
   display_name: 月明·抖音萃取
   icon: icon.svg
@@ -9,27 +9,28 @@ metadata:
 
 # 🌙 月明·抖音萃取
 
-给自己管理的抖音创作者账号扫码绑定，再把已发布作品的指标和评论按账号、作品保存到本地。账号绑定、登录状态和采集数据各自有明确归属；切换账号不会共用登录目录、索引或未归档数据。
+把月明抖音作品的数据拉回本地做复盘。拆成两段：
 
-本 Skill 完全独立于 CreatorOS：用随包脚本和 Playwright 打开创作者中心，不调用 CreatorOS CLI、不读取 CreatorOS 的数据库或登录目录。运行结果是按账号隔离的 JSON 文件，不会写回 CreatorOS。
+| 段 | 数据 | 怎么取 | 谁来跑 |
+|---|---|---|---|
+| **A 公开数据** | 播放/点赞/评论/分享/收藏数、标题、发布时间等公开字段 | Redfox 抖音公开数据接口：`scripts/redfox_public_metrics.py`（作品列表/详情，0.04 元/次） | 团队 Bot（国内运营专家） |
+| **B 私有指标 + 评论全文** | 完播率、平均播放时长、粉丝转化等创作者中心数据；Redfox 暂无的抖音评论全文 | 随包 Playwright 脚本，扫码登录创作者中心 | **只在月明本人 Mac 上由月明运行**，见 [B 段说明](references/mac-login-collector.md) |
 
-## 适用任务
+**登录态规则（团队）**：Bot 不扫码、不保存或读取 Cookie/登录目录，不持有月明的抖音登录态。需要 B 段数据时，请月明在 Mac 上跑，Bot 只读他导出的 JSON。
 
-- 首次绑定自己的抖音创作者账号，或为已有别名重新扫码登录。
-- 更新某个账号的作品指标和评论，或续跑失败作品。
-- 明确要求“更新所有已绑定账号”时，依次采集每个账号并汇总结果。
+## A 段：团队 Bot 用 Redfox 取公开数据
 
-不用于采集他人作品、热点、收藏夹、发布内容或自动创建定时任务。用户只问原理或要求写文章时，解释实现即可，不登录、不采集。
+1. 先报价（不联网、不花钱）：`python3 scripts/redfox_public_metrics.py --account-id <抖音号> --pages 2`，标准错误里会打印调用次数、单价和预计金额。
+2. 调用前查 Redfox 余额（免费接口）；剩余 ≤10% 时停用，并把需要充值的金额报给月明。
+3. 真实调用加 `--run`；一次超过 20 次调用要先把报价交给月明，批准后再加 `--approval "<原话/时间>"`。API Key 只从环境变量 `REDFOX_API_KEY` 读取（团队凭据库注入）。
+4. Redfox 优质库多为 T+1 数据：报告里写清数据日期，不把昨天的数当实时数；缺失字段保留空，不补 0。
+5. 输出写到作品的 `distribution/douyin/<别名>/redfox-YYYYMMDD.json`，与 B 段数据分文件，来源字段写 `redfox-public`。
 
-## Agent 执行规则
+不用于采集他人隐私数据、批量爬取、发布内容或自动创建定时任务。用户只问原理时解释即可，不调用。
 
-1. 先直接运行 `node scripts/src/extract.mjs --accounts` 查看本机已绑定的别名。运行依赖缺失时进入 `scripts/` 安装依赖；不要让用户复制命令。
-2. 用户提到一个账号时，用列表确认唯一别名；未绑定的新账号先由用户指定别名。用户说“全部账号”时才使用 `--all-accounts`。
-3. 新绑定或重连运行 `node scripts/src/extract.mjs --account <别名> --login-only`。脚本会打开全新的临时浏览器 profile；提示用户在该窗口扫码。只有服务器确认登录并读到稳定账号身份后，别名绑定和登录目录才会更新。
-4. 对已绑定账号采集前运行 `--auth-probe`。若会话过期或身份指纹与该别名不符，停止采集并引导在独立临时环境重新扫码；不能把数据写到别名不匹配的目录。
-5. 用户明确要采集时，运行 `node scripts/src/extract.mjs --account <别名>`；只看指标加 `--no-comments`，续跑失败项加 `--resume`。报告实际采集结果和不完整原因，不把排队、超时或缺字段说成成功。
+## B 段要点（详细见 references/mac-login-collector.md）
 
-## 账号绑定与数据隔离
+### 账号绑定与数据隔离
 
 - 用户为每个账号指定本机别名，例如 `main`、`shop-b`。别名经过路径校验，不允许路径穿越。
 - 每次绑定都在独立的临时 Playwright profile 扫码，不复用另一个账号的浏览器会话。扫码后优先读账号资料响应；若资料接口没有身份，再从本人作品列表的作者字段回退读取。必须同时读到昵称和稳定 `sec_uid`。
@@ -38,7 +39,7 @@ metadata:
 - 作品目录按稳定抖音作品 ID 匹配，不按标题猜归属。已知 Workbase 作品会落在其 `distribution/douyin/<别名>/` 子目录；无法唯一匹配时留在当前账号的 `_unassigned/`。
 - 旧版本未带账号归属标记的数据不会自动搬动、覆盖或认领。首次遇到旧目录时保留原状，并要求使用新的账号专属输出目录。
 
-## 采集和恢复
+### 采集和恢复
 
 作品列表读取指标与作品元数据；评论采集按作品执行。所有数值来自平台当前返回，缺失字段保留空/缺，不伪造为真实的 0。重复采集追加指标历史、按评论 ID 合并评论；单作品重采需用户明确要求覆盖。
 
@@ -50,7 +51,8 @@ metadata:
 
 ## 依赖与数据位置
 
-- Node.js 22+、Playwright 和 Playwright Chromium。按 [认证与账号说明](references/auth-setup.md) 首次安装；扫码使用 Playwright 打开的本机可见窗口。
+- A 段：只需 Python 3 标准库和环境变量 `REDFOX_API_KEY`。
+- B 段（仅月明 Mac）：Node.js 22+、Playwright 和 Playwright Chromium，依赖清单在 `scripts/package.json`。按 [认证与账号说明](references/auth-setup.md) 首次安装；扫码使用 Playwright 打开的本机可见窗口。
 - 宿主用内容哈希快照锁定 Skill 时，不在快照内安装或编辑依赖。优先使用宿主提供的依赖运行时；已有维护源安装可作执行入口，但必须先核对其完整内容哈希与当前锁相同，任何差异都停止该入口，不能静默执行新源码。脚本和规则仍以锁定版本为准，依赖目录不作为内容事实证据。
 - 登录目录与账号注册表默认在 `~/.moonlit-creator/.auth/douyin/`；注册表保存在 `accounts.json`，profile 按别名分目录。
 - 每账号默认输出到 `~/moonlit-creator/works/douyin/<别名>/`，包含自己的 `_index.json`、运行记录和未匹配作品。已映射的 Workbase 作品在其作品目录中增加别名子目录。
