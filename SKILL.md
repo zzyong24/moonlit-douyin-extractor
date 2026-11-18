@@ -14,7 +14,7 @@ metadata:
 | 段 | 数据 | 怎么取 | 谁来跑 |
 |---|---|---|---|
 | **A 公开数据** | 播放/点赞/评论/分享/收藏数、标题、发布时间等公开字段 | Redfox 抖音公开数据接口：`scripts/redfox_public_metrics.py`（作品列表/详情，0.04 元/次） | 团队 Bot（国内运营专家） |
-| **B 私有指标 + 评论全文** | 完播率、平均播放时长、粉丝转化等创作者中心数据；Redfox 暂无的抖音评论全文 | 随包 Playwright 脚本，扫码登录创作者中心 | **只在月明本人 Mac 上由月明运行**，见 [B 段说明](references/mac-login-collector.md) |
+| **B 私有指标 + 评论全文** | 完播率、平均播放时长、粉丝转化等创作者中心数据；Redfox 暂无的抖音评论全文 | 本轮获准的 Ego 专用空间，沿已登录账号读取 | **只在月明本人 Mac 上由月明运行**，见 [B 段说明](references/mac-login-collector.md) |
 
 **登录态规则（团队）**：Bot 不扫码、不保存或读取 Cookie/登录目录，不持有月明的抖音登录态。需要 B 段数据时，请月明在 Mac 上跑，Bot 只读他导出的 JSON。
 
@@ -30,14 +30,12 @@ metadata:
 
 ## B 段要点（详细见 references/mac-login-collector.md）
 
-### 账号绑定与数据隔离
+### 当前浏览器入口与隔离
 
-- 用户为每个账号指定本机别名，例如 `main`、`shop-b`。别名经过路径校验，不允许路径穿越。
-- 每次绑定都在独立的临时 Playwright profile 扫码，不复用另一个账号的浏览器会话。扫码后优先读账号资料响应；若资料接口没有身份，再从本人作品列表的作者字段回退读取。必须同时读到昵称和稳定 `sec_uid`。
-- 注册表只保存 `sec_uid` 的 SHA-256 指纹，不保存 Cookie 或原始 `sec_uid`。一个稳定身份不能绑定到两个别名；已绑定别名只能由同一身份更新登录态。
-- 每个别名分别保存登录 profile、采集索引和作品数据。输出目录有账号归属标记；即使用户把两个别名误指向同一自定义目录，第二个账号也会被拒绝写入。
-- 作品目录按稳定抖音作品 ID 匹配，不按标题猜归属。已知 Workbase 作品会落在其 `distribution/douyin/<别名>/` 子目录；无法唯一匹配时留在当前账号的 `_unassigned/`。
-- 旧版本未带账号归属标记的数据不会自动搬动、覆盖或认领。首次遇到旧目录时保留原状，并要求使用新的账号专属输出目录。
+- 所有浏览器自动化统一先读 `ego-browser` 并执行 `ego-browser skill`，按稳定任务空间名 claim；不调用随包旧 Playwright 扫码、profile 或启动 Chrome 的脚本。Ego 受阻时报具体缺口，不换浏览器。
+- 使用本人已登录且本轮获准的空间；首次读取核昵称与稳定账号标识，账号不符立即停写。遇登录/MFA由月明处理，不读取、导出或迁移 Cookie。
+- 账号别名经过路径校验，作品按平台永久 ID 关联；别名与身份不明时不自动认领历史数据。未匹配数据落使用方 `maintenance/analytics/douyin/<别名>/`，不因一条数据创建作品。
+- 旧账号绑定与 profile 隔离实现保留作历史，不作为当前浏览器操作路线；已有 B 段导出 JSON 可以只读复用并记录采集日期。
 
 ### 采集和恢复
 
@@ -52,10 +50,10 @@ metadata:
 ## 依赖与数据位置
 
 - A 段：只需 Python 3 标准库和环境变量 `REDFOX_API_KEY`。
-- B 段（仅月明 Mac）：Node.js 22+、Playwright 和 Playwright Chromium，依赖清单在 `scripts/package.json`。按 [认证与账号说明](references/auth-setup.md) 首次安装；扫码使用 Playwright 打开的本机可见窗口。
+- B 段（仅月明 Mac）：当前 `ego-browser` 与本轮已授权账号空间；[历史认证说明](references/auth-setup.md) 仅用于解释旧数据，不按其安装或启动旧浏览器。
 - 宿主用内容哈希快照锁定 Skill 时，不在快照内安装或编辑依赖。优先使用宿主提供的依赖运行时；已有维护源安装可作执行入口，但必须先核对其完整内容哈希与当前锁相同，任何差异都停止该入口，不能静默执行新源码。脚本和规则仍以锁定版本为准，依赖目录不作为内容事实证据。
 - 登录目录与账号注册表默认在 `~/.moonlit-creator/.auth/douyin/`；注册表保存在 `accounts.json`，profile 按别名分目录。
-- 每账号默认输出到 `~/moonlit-creator/works/douyin/<别名>/`，包含自己的 `_index.json`、运行记录和未匹配作品。已映射的 Workbase 作品在其作品目录中增加别名子目录。
+- 每账号默认输出到 使用方 `maintenance/analytics/douyin/<别名>/`，包含自己的 `_index.json`、运行记录和未匹配作品。已映射的 Workbase 作品在其作品目录中增加别名子目录。
 - Cookie、身份指纹、评论和指标都可能属于敏感数据；这些是运行期本机数据，不属于 Skill 或开源仓库。
 
 命令参数与例子见 [常用调用](references/recipes.md)，字段和文件布局见 [输出结构](references/output-layout.md)。
